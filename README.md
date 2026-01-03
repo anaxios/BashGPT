@@ -30,3 +30,8 @@ Shows the definition of a word and tries to correct spelling.
 ```shell
 define apokatastasis
 ```
+## Requirements
+
+requires:
+- bash
+- jq
