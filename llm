@@ -87,8 +87,11 @@ main() {
             ]
          }'
     )
+
     local log="$(parseLog)"
-    json="$(jq -s --argjson base "$json" \
+    # Kind of a hacky mess.
+    json="$(jq -s \
+        --argjson base "$json" \
         '
     . as $insert 
     | $base 
