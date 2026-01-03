@@ -8,10 +8,12 @@ EOF
 
 FIFO='/tmp/llm-response'
 if ! [[ -e "$FIFO" ]]; then mkfifo "$FIFO"; fi
-trap 'rm -f "$FIFO";exit 1' EXIT INT
+trap 'rm -f "$FIFO";exit 1' INT
+trap 'rm -f "$FIFO";exit 0' EXIT
 
 #model="deepseek-r1:14b"
-model="llama3.1:8b"
+#model="llama3.1:8b"
+model="qwen3:8b"
 stream="true"
 endpoint='http://bastian.stargazer-mountain.ts.net:11434/v1/chat/completions'
 
