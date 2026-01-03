@@ -6,6 +6,7 @@ You are a helpful assistant.
 EOF
 ) 
 
+
 FIFO='/tmp/llm-response'
 if ! [[ -e "$FIFO" ]]; then mkfifo "$FIFO"; fi
 trap 'rm -f "$FIFO";exit 1' INT
@@ -14,6 +15,22 @@ trap 'rm -f "$FIFO";exit 0' EXIT
 model="$BASHGPT_MODEL"
 endpoint="$BASHGPT_ENDPOINT"
 stream="true"
+LOGGING='true'
+LOGFILE="$HOME/.bashgpt.txt"
+
+die() {
+    echo "ERROR @ ${BASH_LINENO[1]}: $*" >&2; exit 1
+}
+
+log() {
+    [[ ! "$LOGGING" ]] && return
+    [[ "USER" == "$1" ]] || [[ "ASSISTANT" == "$1" ]] || die "log needs 'USER' or 'ASSISTANT'"
+    [[ ! -e "$LOGFILE" ]] && touch "$LOGFILE"
+    echo "$1" >> "$LOGFILE"
+    shift
+    echo "$*" >> "$LOGFILE"
+    echo >> "$LOGFILE"
+}
 
 saniprint() {
     echo -ne "$*" \
@@ -24,7 +41,16 @@ saniprint() {
         -e 's/[\*\`\>]//g'
 }
 
+trim_string() {
+    # Usage: trim_string "   example   string    "
+    : "${1#"${1%%[![:space:]]*}"}"
+    : "${_%"${_##*[![:space:]]}"}"
+    printf '%s\n' "$_"
+}
+
 main() {
+    local streamBuffer=''
+
     json=$(jq -n \
         --arg p "$prompt" \
         --arg q "$query" \
@@ -51,27 +77,36 @@ main() {
         -d "$json" \
         > "$FIFO" &
 
+    log "USER" "$query"
     while read -r line; do
+        # remove 'data:' from beginning of each line.
         local l="$(sed -e 's/^data: //' <<< "$line")"
         if [[ "[DONE]" == "$l" ]]; then 
             break 
         fi
 
-        local r="$(jq  '.choices[0].delta.content' <<< "$l")"
+        local r="$(jq '.choices[0].delta.content' <<< "$l")"
+        local rLog="$(jq -r '.choices[0].delta.content' <<< "$l")"
         if [[ "" != "$r" ]]; then 
+            streamBuffer="$streamBuffer$rLog"
             saniprint "$r"
         fi
     done < "$FIFO"
+
+    log "ASSISTANT" "${streamBuffer[*]}"
 }
 
 usage() {
     echo "use -p to set prompt"
 }
 
-while getopts ":p:" flag; do
+while getopts ":p:l" flag; do
     case "$flag" in
         p)
             prompt="$OPTARG"
+            ;;
+        l)
+            LOGGING=''
             ;;
         *) 
             echo "bad arg" >&2

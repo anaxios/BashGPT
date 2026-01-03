@@ -21,7 +21,7 @@ EOF
 trap 'exit 1' EXIT INT
 
 main() {
-    llm -p "$prompt" "now define $*"
+    llm -l -p "$prompt" "now define $*"
 }
 
 main "$@"
