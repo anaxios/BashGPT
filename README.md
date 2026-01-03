@@ -1,8 +1,10 @@
 # BashGPT
 
-The 'llm' scrip. lets you ask questions to an LLM. 
+The 'llm' script lets you ask questions to an LLM from your terminal.
 
-The 'define' script uses the 'llm' script and lets you define words in the terminal `define artificial intelligence`
+The 'define' script uses the 'llm' script and lets you define words in the terminal 
+
+`define artificial intelligence`
 
 ## Install
 
@@ -21,7 +23,7 @@ Ask the LLM a question.
 llm "my question"
 ```
 
-Optional `-p` flag to set a custom system prompt.
+Optional `-p` flag to set a custom system prompt. Or system prompt can be changed directly in script.
 ```shell
 llm -p "my custom prompt" "my question"
 ```
