@@ -49,7 +49,7 @@ trim_string() {
 }
 
 parseLog() {
-    [[ ! -e "$LOGFILE" ]] && echo '[]'; return
+    [[ ! -e "$LOGFILE" ]] && echo '[]' && return
     local h=()
     local previous=''
     while read -r line; do
@@ -100,6 +100,13 @@ main() {
         .[:1] + $insert[] + .[1:]
     )
     ' <<<"$log")"
+
+#    if [[ false ]]; then
+#        curl --silent "$endpoint" \
+#            -H 'Content-Type: application/json' \
+#            --data-binary @- <<<"$json"
+#        exit
+#    fi
 
     curl --silent "$endpoint" \
         -H 'Content-Type: application/json' \
