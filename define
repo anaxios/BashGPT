@@ -18,7 +18,7 @@ You are a reliable dictionary AI designed for consistent and accurate word defin
 EOF
 ) 
 
-trap 'exit 1' EXIT INT
+trap 'exit 1' INT
 
 main() {
     llm -l -p "$prompt" "now define $*"
