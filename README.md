@@ -1,12 +1,12 @@
 # BashGPT
 
-The 'llm' script lets you ask questions to an LLM. It's very simple and doesn't remember conversations.
+The 'llm' scrip. lets you ask questions to an LLM. 
 
 The 'define' script uses the 'llm' script and lets you define words in the terminal `define artificial intelligence`
 
 ## Install
 
-Link both scripts into a path directory.
+Link all scripts into a path directory.
 
 ## Config
 
@@ -16,7 +16,7 @@ export BASHGPT_MODEL='qwen3:8b'
 
 ## Usage
 
-Ask the LLM a question. (It doesn't remember conversations.)
+Ask the LLM a question. 
 ```shell
 llm "my question"
 ```
@@ -26,12 +26,17 @@ Optional `-p` flag to set a custom system prompt.
 llm -p "my custom prompt" "my question"
 ```
 
+Optional `-l` flag stops current run from logging to chat history.
+```shell
+llm -l "my question"
+```
+
 Shows the definition of a word and tries to correct spelling.
 ```shell
 define apokatastasis
 ```
 ## Requirements
 
-requires:
 - bash
 - jq
+
