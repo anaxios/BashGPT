@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+prompt=$(cat <<EOF
+You are a helpful assistant.
+
+EOF
+) 
+
+FIFO='/tmp/llm-response'
+if ! [[ -e "$FIFO" ]]; then mkfifo "$FIFO"; fi
+trap 'rm -f "$FIFO";exit 1' EXIT INT
+
+#model="deepseek-r1:14b"
+model="llama3.1:8b"
+stream="true"
+endpoint='http://bastian.stargazer-mountain.ts.net:11434/v1/chat/completions'
+
+saniprint() {
+    echo -ne "$*" \
+        | sed -u \
+        -e 's/^\"//' \
+        -e 's/\"$//' \
+        -e 's/\\\"/\"/g' \
+        -e 's/[\*\`\>]//g'
+}
+
+main() {
+    json=$(jq -n \
+        --arg p "$prompt" \
+        --arg q "$query" \
+        --arg m "$model" \
+        --argjson s "$stream" \
+        '{
+            "model": $m,
+            "stream": $s,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": $p
+                },
+                {
+                    "role": "user",
+                    "content": $q
+                }
+            ]
+         }'
+    )
+
+    curl --silent "$endpoint" \
+        -H 'Content-Type: application/json' \
+        -d "$json" \
+        > "$FIFO" &
+
+    while read -r line; do
+        local l="$(sed -e 's/^data: //' <<< "$line")"
+        if [[ "[DONE]" == "$l" ]]; then 
+            break 
+        fi
+
+        local r="$(jq  '.choices[0].delta.content' <<< "$l")"
+        if [[ "" != "$r" ]]; then 
+            saniprint "$r"
+        fi
+    done < "$FIFO"
+}
+
+usage() {
+    echo "use -p to set prompt"
+}
+
+while getopts ":p:" flag; do
+    case "$flag" in
+        p)
+            prompt="$OPTARG"
+            ;;
+        *) 
+            echo "bad arg" >&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+query="$*"
+
+main
