@@ -49,6 +49,7 @@ trim_string() {
 }
 
 parseLog() {
+    [[ ! -e "$LOGFILE" ]] && echo '[]'; return
     local h=()
     local previous=''
     while read -r line; do
@@ -128,13 +129,17 @@ usage() {
     echo "use -p to set prompt"
 }
 
-while getopts ":p:l" flag; do
+while getopts ":p:lc" flag; do
     case "$flag" in
         p)
             prompt="$OPTARG"
             ;;
         l)
             LOGGING=''
+            ;;
+        c) # Clear chat history
+            rm -f "$LOGFILE"
+            exit
             ;;
         *) 
             echo "bad arg" >&2
