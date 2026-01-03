@@ -13,8 +13,10 @@ Link all scripts into a path directory.
 ## Config
 
 Set environment variables
+```
 export BASHGPT_ENDPOINT='http://my-ollama-instance.net:11434/v1/chat/completions'
 export BASHGPT_MODEL='qwen3:8b'
+```
 
 ## Usage
 
