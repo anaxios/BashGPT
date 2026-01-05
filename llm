@@ -37,7 +37,6 @@ Stay within your capabilities and knowledge limits.
 EOF
 ) 
 
-
 FIFO='/tmp/llm-response'
 if ! [[ -e "$FIFO" ]]; then mkfifo "$FIFO"; fi
 trap 'rm -f "$FIFO";exit 1' INT
@@ -53,13 +52,17 @@ die() {
     echo "ERROR @ ${BASH_LINENO[1]}: $*" >&2; exit 1
 }
 
+debug() {
+    [[ -n "$DEBUG" ]] && echo "$*" >&2
+}
+
 log() {
     [[ ! "$LOGGING" ]] && return
     [[ "USER" == "$1" ]] || [[ "ASSISTANT" == "$1" ]] || die "log needs 'USER' or 'ASSISTANT'"
     [[ ! -e "$LOGFILE" ]] && touch "$LOGFILE"
-    echo "$1" >> "$LOGFILE"
+    printf '%s\n' "$1" >> "$LOGFILE"
     shift
-    echo "$*" >> "$LOGFILE"
+    printf '%s\n' "$*" >> "$LOGFILE"
     echo >> "$LOGFILE"
 }
 
@@ -79,7 +82,7 @@ trim_string() {
     printf '%s\n' "$_"
 }
 
-parseLog() {
+logToJson() {
     [[ ! -e "$LOGFILE" ]] && echo '[]' && return
     local h=()
     local previous=''
@@ -96,10 +99,8 @@ parseLog() {
     echo "${h[*]}" | jq -s .
 }
 
-main() {
-    local streamBuffer=''
-
-    json=$(jq -n \
+buildJson() {
+    local json=$(jq -n \
         --arg p "$prompt" \
         --arg q "$query" \
         --arg m "$model" \
@@ -120,7 +121,7 @@ main() {
          }'
     )
 
-    local log="$(parseLog)"
+    local log="$(logToJson)"
     # Kind of a hacky mess.
     json="$(jq -s \
         --argjson base "$json" \
@@ -131,52 +132,178 @@ main() {
         .[:1] + $insert[] + .[1:]
     )
     ' <<<"$log")"
+    
+    printf '%s' "$json"
+}
 
-#    if [[ false ]]; then
-#        curl --silent "$endpoint" \
-#            -H 'Content-Type: application/json' \
-#            --data-binary @- <<<"$json"
-#        exit
-#    fi
+main() {
+    local streamBuffer=''
+    local m_state="STATE_BEGIN"
+    local prev_state
+
+    # Debug curl itself
+    #    if ! [[ true ]]; then
+    #        curl --silent "$endpoint" \
+    #            -H 'Content-Type: application/json' \
+    #            --data-binary @- <<<"$json"
+    #        exit
+    #    fi
 
     curl --silent "$endpoint" \
         -H 'Content-Type: application/json' \
-        --data-binary @- <<<"$json" \
+        --data-binary @- <<<"$(buildJson)" \
         > "$FIFO" &
+    #sleep 5
 
-    log "USER" "$query"
+
+
+    local err reasoning content finish_reason
+    local line
     while read -r line; do
+        #read -r line < "$FIFO"
         # remove 'data:' from beginning of each line.
-        local l="$(sed -e 's/^data: //' <<< "$line")"
-        if [[ "[DONE]" == "$l" ]]; then 
-            break 
-        fi
+        line="$(sed -e 's/^data: //' <<< "$line")"
 
-        local r="$(jq '.choices[0].delta.content' <<< "$l")"
-        local rLog="$(jq -r '.choices[0].delta.content' <<< "$l")"
-        if [[ "" != "$r" ]]; then 
-            streamBuffer="$streamBuffer$rLog"
-            saniprint "$r"
+        case "$line" in
+            "[DONE]") # Stop when recieve done message
+                #finish_reason='stop'
+                break
+                ;;
+            "") # Skip blank lines
+                continue
+                ;;
+            *) # Extract data from json while or break
+                mapfile -t fields < <(
+                    jq -r '
+                    (.error? // null),
+                    (.choices[0].delta.reasoning? // null),
+                    (.choices[0].delta.content? // null),
+                    (.choices[0].finish_reason? // null)
+                    ' <<< "$line"
+                )
+
+                err=${fields[0]}
+                reasoning=${fields[1]}
+                content=${fields[2]}
+                finish_reason=${fields[3]}
+                debug "$line"
+
+                #break
+                ;;
+        esac
+
+        local count=0
+        while [[ 10000 -gt $count ]]; do
+        ((++count))
+        debug "COUNT: $count"
+        debug "prev:$prev_state"
+        debug "current:$m_state"
+        debug "err: $err"
+        debug "reasoning: $reasoning"
+        debug "content: $content"
+        debug "finish_reason: $finish_reason"
+
+#        if [[ "stop" == "$finish_reason" ]]; then
+#            m_state="STATE_DONE" 
+#        fi
+
+        if [[ -n "$err" && 'null' != "$err" ]]; then
+            m_state="STATE_ERROR" 
         fi
+        # State Machine (terrible idea)
+        case "$m_state"  in
+            "STATE_ERROR")
+                local errtype="$(jq '.type' <<<"$err")"
+                local errmessage="$(jq '.message' <<<"$err")"
+                die "ERROR response from server: type: $errtype message: $errmessage"
+                ;;
+            "STATE_BEGIN")
+                log "USER" "$query"
+                prev_state="$m_state"
+                if [[ -n  "$reasoning" ]] && [[ 'null' != "$reasoning" ]]; then
+                    m_state="STATE_THINKING" 
+                elif [[ -n  "$content" ]] && [[ 'null' != "$content" ]]; then
+                    m_state="STATE_RESPONSE" 
+                fi
+                continue
+                ;;
+            "STATE_DONE")
+                log "ASSISTANT" "${streamBuffer[*]}"
+                debug "$m_state"
+                prev_state="$m_state"
+                break
+                ;;
+            "STATE_THINKING")
+                prev_state="$m_state"
+                if [[ -n "$content" ]] && [[ 'null' != "$content" ]]; then
+                    m_state="STATE_RESPONSE" 
+                    continue
+                fi
+                if [[ -n "$thinking" ]]; then
+                    printf $"\e[3m$(saniprint "$reasoning")\e[23m"
+                fi
+                #saniprint "$reasoning"
+                break
+                ;;
+            "STATE_RESPONSE")
+                [[ "STATE_THINKING" == "$prev_state" && -n "$thinking" ]] && echo -e "\n\n"
+                streamBuffer="$streamBuffer$content"
+                #printf '%s' "$content"
+                saniprint "$content"
+                prev_state="$m_state"
+                if [[ "stop" == "$finish_reason" ]]; then
+                    m_state="STATE_DONE" 
+                    continue
+                fi
+                break
+                ;;
+        esac
+
+
+
+
+        done
     done < "$FIFO"
 
-    log "ASSISTANT" "${streamBuffer[*]}"
 }
 
 usage() {
-    echo "use -p to set prompt"
+    cat <<-EOF
+Usage: 
+    -p to set prompt
+    -c to clear history
+    -l ignore history
+    -m set model
+    -t show thinking messages
+    -D print debug messages
+    -h print this message and exit
+
+EOF
 }
 
-while getopts ":p:lc" flag; do
+while getopts ":p:m:tlDch" flag; do
     case "$flag" in
         p)
             prompt="$OPTARG"
             ;;
+        m)
+            model="$OPTARG"
+            ;;
+        t)
+            thinking=1
+            ;;
         l)
-            LOGGING=''
+            LOGGING=
+            ;;
+        D)
+            DEBUG=1
             ;;
         c) # Clear chat history
             rm -f "$LOGFILE"
+            exit
+            ;;
+        h)
+            usage
             exit
             ;;
         *) 
