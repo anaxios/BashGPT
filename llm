@@ -39,7 +39,7 @@ EOF
 
 FIFO='/tmp/llm-response'
 if ! [[ -e "$FIFO" ]]; then mkfifo "$FIFO"; fi
-trap 'rm -f "$FIFO";exit 1' INT
+#trap 'rm -f "$FIFO";exit 1' INT
 trap 'rm -f "$FIFO";exit 0' EXIT
 
 model="$BASHGPT_MODEL"
@@ -87,12 +87,14 @@ logToJson() {
     local h=()
     local previous=''
     while read -r line; do
-        if [[ "USER" == "$previous" ]]; then
-            h+=("$(jq -n --arg l "$line" '{"role": "user", "content": $l}')")
-        fi
-        if [[ "ASSISTANT" == "$previous" ]]; then
-            h+=("$(jq -n --arg l "$line" '{"role": "assistant", "content": $l}')")
-        fi
+        case "$previous" in
+            "USER")
+                h+=("$(jq -n --arg l "$line" '{"role": "user", "content": $l}')")
+                ;;
+            "ASSISTANT")
+                h+=("$(jq -n --arg l "$line" '{"role": "assistant", "content": $l}')")
+                ;;
+        esac
         previous="$line"
     done < "$LOGFILE"
 
@@ -153,9 +155,6 @@ main() {
         -H 'Content-Type: application/json' \
         --data-binary @- <<<"$(buildJson)" \
         > "$FIFO" &
-    #sleep 5
-
-
 
     local err reasoning content finish_reason
     local line
@@ -173,19 +172,27 @@ main() {
                 continue
                 ;;
             *) # Extract data from json while or break
-                mapfile -t fields < <(
-                    jq -r '
+                mapfile -t raw_fields < <(
+                    jq -r  '
                     (.error? // null),
+                    (.choices[0].finish_reason? // null),
                     (.choices[0].delta.reasoning? // null),
-                    (.choices[0].delta.content? // null),
-                    (.choices[0].finish_reason? // null)
+                    (.choices[0].delta.content? // null)
+                    ' <<< "$line"
+                )
+                mapfile -t fields < <(
+                    jq '
+                    (.choices[0].delta.reasoning? // null),
+                    (.choices[0].delta.content? // null)
                     ' <<< "$line"
                 )
 
-                err=${fields[0]}
-                reasoning=${fields[1]}
-                content=${fields[2]}
-                finish_reason=${fields[3]}
+                err="${raw_fields[0]}"
+                reasoning="${fields[0]}"
+                reasoning_to_log="${raw_fields[2]}"
+                content="${fields[1]}"
+                content_to_log="${raw_fields[3]}"
+                finish_reason="${raw_fields[1]}"
                 debug "$line"
 
                 #break
@@ -194,74 +201,70 @@ main() {
 
         local count=0
         while [[ 10000 -gt $count ]]; do
-        ((++count))
-        debug "COUNT: $count"
-        debug "prev:$prev_state"
-        debug "current:$m_state"
-        debug "err: $err"
-        debug "reasoning: $reasoning"
-        debug "content: $content"
-        debug "finish_reason: $finish_reason"
+            ((++count))
+            debug "COUNT: $count"
+            debug "prev:$prev_state"
+            debug "current:$m_state"
+            debug "err: $err"
+            debug "reasoning: $reasoning"
+            debug "content: $content"
+            debug "finish_reason: $finish_reason"
 
-#        if [[ "stop" == "$finish_reason" ]]; then
-#            m_state="STATE_DONE" 
-#        fi
+            #        if [[ "stop" == "$finish_reason" ]]; then
+            #            m_state="STATE_DONE" 
+            #        fi
 
-        if [[ -n "$err" && 'null' != "$err" ]]; then
-            m_state="STATE_ERROR" 
-        fi
-        # State Machine (terrible idea)
-        case "$m_state"  in
-            "STATE_ERROR")
-                local errtype="$(jq '.type' <<<"$err")"
-                local errmessage="$(jq '.message' <<<"$err")"
-                die "ERROR response from server: type: $errtype message: $errmessage"
-                ;;
-            "STATE_BEGIN")
-                log "USER" "$query"
-                prev_state="$m_state"
-                if [[ -n  "$reasoning" ]] && [[ 'null' != "$reasoning" ]]; then
-                    m_state="STATE_THINKING" 
-                elif [[ -n  "$content" ]] && [[ 'null' != "$content" ]]; then
-                    m_state="STATE_RESPONSE" 
-                fi
-                continue
-                ;;
-            "STATE_DONE")
-                log "ASSISTANT" "${streamBuffer[*]}"
-                debug "$m_state"
-                prev_state="$m_state"
-                break
-                ;;
-            "STATE_THINKING")
-                prev_state="$m_state"
-                if [[ -n "$content" ]] && [[ 'null' != "$content" ]]; then
-                    m_state="STATE_RESPONSE" 
+            if [[ -n "$err" && 'null' != "$err" ]]; then
+                m_state="STATE_ERROR" 
+            fi
+            # State Machine (terrible idea)
+            case "$m_state"  in
+                "STATE_ERROR")
+                    local errtype="$(jq '.type' <<<"$err")"
+                    local errmessage="$(jq '.message' <<<"$err")"
+                    die "ERROR response from server: type: $errtype message: $errmessage"
+                    ;;
+                "STATE_BEGIN")
+                    log "USER" "$query"
+                    prev_state="$m_state"
+                    if [[ -n  "$reasoning_to_log" ]] && [[ 'null' != "$reasoning_to_log" ]]; then
+                        m_state="STATE_THINKING" 
+                    elif [[ -n  "$content_to_log" ]] && [[ 'null' != "$content_to_log" ]]; then
+                        m_state="STATE_RESPONSE" 
+                    fi
                     continue
-                fi
-                if [[ -n "$thinking" ]]; then
-                    printf $"\e[3m$(saniprint "$reasoning")\e[23m"
-                fi
-                #saniprint "$reasoning"
-                break
-                ;;
-            "STATE_RESPONSE")
-                [[ "STATE_THINKING" == "$prev_state" && -n "$thinking" ]] && echo -e "\n\n"
-                streamBuffer="$streamBuffer$content"
-                #printf '%s' "$content"
-                saniprint "$content"
-                prev_state="$m_state"
-                if [[ "stop" == "$finish_reason" ]]; then
-                    m_state="STATE_DONE" 
-                    continue
-                fi
-                break
-                ;;
-        esac
-
-
-
-
+                    ;;
+                "STATE_DONE")
+                    log "ASSISTANT" "${streamBuffer[*]}"
+                    debug "$m_state"
+                    prev_state="$m_state"
+                    break
+                    ;;
+                "STATE_THINKING")
+                    prev_state="$m_state"
+                    if [[ -n "$content_to_log" ]] && [[ 'null' != "$content_to_log" ]]; then
+                        m_state="STATE_RESPONSE" 
+                        continue
+                    fi
+                    if [[ -n "$thinking" ]]; then
+                        printf $"\e[3m$(saniprint "$reasoning")\e[23m"
+                    fi
+                    #saniprint "$reasoning"
+                    break
+                    ;;
+                "STATE_RESPONSE")
+                    [[ "STATE_THINKING" == "$prev_state" && -n "$thinking" ]] && echo -e "\n\n"
+                    streamBuffer="$streamBuffer$content_to_log"
+                    #printf '%s' "$content"
+                    saniprint "$content"
+                    prev_state="$m_state"
+                    if [[ "stop" == "$finish_reason" ]]; then
+                        m_state="STATE_DONE" 
+                        continue
+                    fi
+                    break
+                    ;;
+            esac
         done
     done < "$FIFO"
 
